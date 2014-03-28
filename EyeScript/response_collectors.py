@@ -342,8 +342,114 @@ class GazeSample(GazeResponseCollector):
                     # I'm not sure why we used to stop  here if a response was recorded. I think we only want to stop when we time out -- Mike
                     #self.stop()
                     return True
-        return False
-                    
+        return False            
+        
+class GazePredictor(GazeSample):
+    """An extension of GazeSample that not only monitors the subject's current gaze but also keeps
+    an internal state that records the beginnings, midpoints, and endings of saccades so that it
+    can make predictions about where the gaze will land.
+        acc_thresh and vel_thresh are the eye velocity and acceleration thresholds in degrees for
+    detecting saccades. offScreenIAs are the IA indexes that will be returned by
+    extrapolateEndingIA() if the gaze goes off screen to the left, top, right, or bottom,      
+    respectively.
+    """
+    def __init__(self, acc_thresh = 8000, vel_thresh = 30, offScreenIAs = [0,0,0,0], resolution = (1024, 768), margins = (180,0,180,40), deltaXAdjust=.35, deltaYAdjust= .35, **params):
+        GazeSample.__init__(self, **params)
+        self.right = False
+        self.left = False
+        self.startingPoint = None
+        self.prevVel = None
+        self.rightAcceleration = None
+        self.rightXVelocity = None
+        self.reachedMidpoint = False
+        self.deltaXAdjust = deltaXAdjust
+        self.deltaYAdjust = deltaYAdjust
+        
+        #0 =  start of left saccade, 1 = midpoint of left saccade, 2 = end of left saccade,
+        #3 = start of right saccade, 4 = midpoint of right saccade, 5 = end of right saccade
+        #The state is initialized to 2 because each trial starts after a saccade to the left during drift correction.
+        self.state = 2
+        
+        self.params['acc_thresh'] = acc_thresh
+        self.params['vel_thresh'] = vel_thresh
+        self.offScreenIAs = offScreenIAs
+        self.resolution = resolution
+        self.margins = margins
+        
+    def checkEyeLink(self):
+        GazeSample.checkEyeLink(self)
+        
+        self.prevAcc = self.rightAcceleration
+        self.prevVel = self.rightXVelocity
+            
+        self.velAndAccel = getTracker().calculateOverallVelocityAndAcceleration(pylink.NINE_SAMPLE_MODEL)
+        self.rightAcceleration = self.velAndAccel[1][1]  
+        
+        self.velocityXY = getTracker().calculateVelocityXY(pylink.NINE_SAMPLE_MODEL)
+        self.rightXVelocity = self.velocityXY[1][0]
+
+        """f.write(str(self.rightAcceleration))
+        f.write(',')
+        f.write(str(self.rightXVelocity))
+        f.write('\n')"""
+    
+        #Start of left saccade
+        if self.rightAcceleration <= -self.params['acc_thresh'] and self.rightXVelocity <= -self.params['vel_thresh'] and not self.left and not self.right:                       
+            self.left = True     
+
+            #This still isn't working quite right. Need to figure out how to restart the trial
+            try:                
+                self.startingPoint = self.params['xy_coords'] #It seems that sometimes the Eyetracker is unable to obtain the current coordinates of the pupil
+
+            except:
+                self.startingPoint = (320,384)
+        
+            self.state = 0
+        
+        #Midpoint of left saccade
+        elif self.rightXVelocity > self.prevVel and self.rightAcceleration > self.prevAcc and self.left and not self.reachedMidpoint:
+            self.reachedMidpoint = True
+            self.predictedEndingIA = self.extrapolateEndingIA()      
+            
+            self.state = 1
+        
+        #End of left saccade
+        elif self.rightAcceleration > -self.params['acc_thresh'] - 2000 and self.rightXVelocity - 15 > -self.params['vel_thresh'] and self.left and self.reachedMidpoint:
+            self.left = False
+            self.reachedMidpoint = False     
+
+            self.state = 2           
+            
+        #Start of right saccade    
+        elif self.rightAcceleration >= self.params['acc_thresh'] and self.rightXVelocity >= self.params['vel_thresh'] and not self.right and not self.left:
+            self.right = True               
+            try:                
+                self.startingPoint = self.params['xy_coords'] 
+
+            except:
+                self.startingPoint = (200,384)
+            
+            self.state = 3
+            
+        #Midpoint of right saccade   
+        elif self.rightXVelocity < self.prevVel and self.rightAcceleration < self.prevAcc and self.right and not self.reachedMidpoint:
+            self.reachedMidpoint = True
+            self.predictedEndingIA = self.extrapolateEndingIA()
+            
+            self.state = 4
+                
+        #End of right saccade
+        elif self.rightAcceleration < self.params['acc_thresh'] + 2000 and self.rightXVelocity + 15 < self.params['vel_thresh'] and self.right and self.reachedMidpoint:
+            self.right = False
+            self.reachedMidpoint = False
+            
+            self.state = 5  
+        
+    def checkIA(self, position):
+        """Determines if raw x,y coordinates lie within an interest area. Mostly for internal use and shouldn't need to be directly called."""
+        for index, area in enumerate(self['possible_resp']):
+            if area.contains(position):
+                return index
                 
 
 class ContinuousGaze(GazeResponseCollector):
