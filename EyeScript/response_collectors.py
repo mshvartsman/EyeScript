@@ -90,7 +90,19 @@ class ResponseCollector(DictMixin):
         self['onset_time'] = pylink.currentTime()
         self['resp'] = None
         getExperiment().response_collectors.append(self)
-        self.running = True
+        self.running = True       
+
+    def disable(self): 
+        """temporarily disable RC if we don't want to accept responses, e.g. if we're doing something where we want to record a trial-level RT but don't want to accept responses until some other condition holds
+        """
+        self.validRespStored = self['possible_resp']
+        self['possible_resp'] = list()
+
+    def reEnable(self): # bring it back -- named reEnable to avoid possible confusion between start() and enable()
+        # add the possible resp back
+        self['resp'] = None # dump any accidental buttonpresses we saw while invalid
+        self['possible_resp'] = self.validRespStored 
+
 
     def respond(self,events):
         """Update status, given the latest events in the queue.
