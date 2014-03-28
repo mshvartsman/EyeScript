@@ -451,7 +451,89 @@ class GazePredictor(GazeSample):
             if area.contains(position):
                 return index
                 
+        return None      
 
+    def extrapolateEndingIA(self):
+        """Predicts which interest area the gaze will land in by calculating the distance between the midpoint of the saccade and the starting point of the saccade and then adding that distance to the midpoint. This method is called automatically whenever the internal state of the response collector is set to a midpoint. However, if it is called manually, it will use the coordinates of the last detected midpoint as its starting point, and its current coordinates as its midpoint."""
+        try:
+            midpoint = self.params['xy_coords']
+
+        except:
+            midpoint = (200,384)
+
+        deltaX = midpoint[0] - self.startingPoint[0]
+        deltaX *= self.deltaXAdjust #The detected "midpoint" is actually closer to the end of the saccade than the real mipoint
+        deltaY = midpoint[1] - self.startingPoint[1]
+        deltaY *= self.deltaYAdjust #The detected "midpoint" is actually closer to the end of the saccade than the real mipoint
+        endingPoint = (midpoint[0] + deltaX, self.startingPoint[1] + deltaY)
+        endingIndex = self.checkIA(endingPoint)
+               
+        #If the predicted landing x,y coordinates are offscreen, set the predicted IA to be either the first on the left, or the last on the right. This code is pretty specific to our current experiment setup, and should be better generalized to just find the nearest IA.
+        if endingIndex == None:
+            if endingPoint[0] < self.resolution[0] + self.margins[0]:
+                endingIndex = self.offScreenIAs[0]
+            
+            if endingPoint[0] > self.resolution[0] - self.margins[2]:
+                endingIndex = self.offScreenIAs[2]
+                
+            if endingPoint[1] > self.resolution[1] + self.margins[1]:
+                endingIndex = self.offScreenIAs[1]
+                
+            if endingPoint[1] < self.resolution[1] - self.margins[3]:
+                endingIndex = self.offScreenIAs[3]
+        
+        self.startingPoint = midpoint
+        return endingIndex     
+        
+        
+    def predictedLandingIA(self):
+        """Returns the index of the interest area the response collector expects the gaze to land in after a saccade."""
+        return self.predictedEndingIA
+        
+    def detect(self, reset, states):
+        """A helper method for all the remaining methods. For internal use only, and should never be called directly."""
+        if reset:
+            if self.state in states:
+                self.state = None
+                return True
+            else:
+                return False
+        else:
+            return self.state in states
+            
+    """The following methods all work similarly. They return True if the eye is in a specific state, e.g. the start of a left saccade or the end of a right saccade, and False otherwise.
+    If reset is set to True, the internal state of the response collector will be cleared. This means that a particular method cannot return True more than once during the same saccade. This is useful, for example, if you want a display to be drawn once and only once at the begginning or end of a saccade.
+    If reset is set to False, a particular method will continue to return True until the state of the response collector changes. This is useful, for example, if you want to do something continuously after a saccade has started, but before the midpoint of the saccade has been reached.
+    
+    A note about saccade midpoints: In the current implementation, the midpoint is detected once the absolute value of the velocity starts to decrease. There seems to be a delay between the eyetracker's calculation of velocity and the real-time displacement of the eye, so this effectively means that the position of the eye at the detected midpoint is very near the position of the eye at the saccade endpoint."""        
+                
+    def leftSaccadeStart(self, reset=True):
+        return self.detect(reset, [0])
+            
+    def leftSaccadeMidpoint(self, reset=True):
+        return self.detect(reset, [1])
+        
+    def leftSaccadeEnd(self, reset=True):
+        return self.detect(reset, [2])
+        
+    def rightSaccadeStart(self, reset=True):
+        return self.detect(reset, [3])
+        
+    def rightSaccadeMidpoint(self, reset=True):
+        return self.detect(reset, [4])
+        
+    def rightSaccadeEnd(self, reset=True):
+        return self.detect(reset, [5])
+        
+    def saccadeStart(self, reset=True):
+        return self.detect(reset, [0, 3])
+        
+    def saccadeMidpoint(self, reset=True):
+        return self.detect(reset, [1, 4])
+        
+    def saccadeEnd(self, reset=True):
+        return self.detect(reset, [2, 5])       
+        
 class ContinuousGaze(GazeResponseCollector):
     """Monitor subject's fixations and check if they fall in a given area and stay there continuously for a minimum duration
     
@@ -469,7 +551,6 @@ class ContinuousGaze(GazeResponseCollector):
         """Check if the eyes have fixated in one of the areas listed in possible_resp, and have stayed there for the specified minimum time.
         If so, record rt, rt_time, and resp, and return True; otherwise return False.
         """   
-            
         if self.fixatedArea: #We've already started fixating on one of the areas in possible_resp
             sample = getTracker().getNewestSample()
             # Retrieve the sample data from whichever eye we care about
@@ -484,13 +565,9 @@ class ContinuousGaze(GazeResponseCollector):
                         self.params['rt_time'] = self.fixtime
                         self.params['rt'] = self.params['rt_time'] - self.params['onset_time']
                         self.params['resp'] = self.fixatedArea
-                        # TODO: Test the following code:
-                        # In particular: is the number specifying the offset
-                        # between here and the eye tracker meaningful and
-                        # correct?  What's the meaning of this number anyway?
-                        # And what's it used for?
-                        getTracker().sendMessage("%s.END_RT" % self['name'])
-                        self.stop()
+                        # print self.fixtime, self.params['rt'], self.params['rt_time'], self.params['onset_time']
+                        # I'm not sure why we used to stop  here if a response was recorded. I think we only want to stop when we time out -- Mike
+                        #self.stop()
                         return True
                 else: # The eye has left the interest area.  
                     self.fixatedArea = None
@@ -498,11 +575,10 @@ class ContinuousGaze(GazeResponseCollector):
               
         else:
             # Check whether we have a fixation in one of the areas in possible_resp
-            eventType = getTracker().getNextData()
-            if eventType == pylink.STARTFIX or eventType == pylink.FIXUPDATE or eventType == pylink.ENDFIX:
-                event = getTracker().getFloatData()
-    ##                        print "event.getEye(): %d"%(event.getEye())
-    ##                        print "event.getStartGaze(): (%d,%d)"%event.getStartGaze()
+            event = getTracker().getFloatData()
+##                        print "event.getEye(): %d"%(event.getEye())
+##                        print "event.getStartGaze(): (%d,%d)"%event.getStartGaze()
+            if event:
                 if event.getType() == pylink.STARTFIX and event.getEye() == self.eyeUsed:
                     for area in self.params['possible_resp']:
                         if area.contains(event.getStartGaze()):
