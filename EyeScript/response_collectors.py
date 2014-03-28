@@ -321,6 +321,7 @@ class GazeSample(GazeResponseCollector):
     Return a response as soon as a sample in an interest area is detected (don't wait for a fixation to be detected).
     """
     def checkEyeLink(self):
+        time = pylink.currentTime()
         sample = getTracker().getNewestSample()
         sampledata = sample and (
                 (self.eyeUsed == 1 and sample.isRightSample() and sample.getRightEye()) or
@@ -329,18 +330,17 @@ class GazeSample(GazeResponseCollector):
         if sampledata:
             for area in self['possible_resp']:
                 if area.contains(sampledata.getGaze()):
-                    self.params['rt_time'] = sample.getTime()
-                    self.params['rt'] = sample.getTime() - self.params['onset_time']
+                    # self.params['rt_time'] = sample.getTime()
+                    # self.params['rt'] = sample.getTime() - self.params['onset_time']
+                    self.params['rt_time'] = time
+                    self.params['rt'] = time - self.params['onset_time']
                     self.params['resp'] = area
-                    # TODO: Test the following code:
-                    # In particular: is the number specifying the offset
-                    # between here and the eye tracker meaningful and
-                    # correct?  What's the meaning of this number anyway?
-                    # And what's it used for?
-                    getTracker().sendMessage("%s.END_RT"%(self['name']))
-                    #getTracker().sendMessage("%d %s.END_RT"%(self['rt_time']-pylink.currentTime(),
-                    #                                         self['name']))
-                    self.stop()
+                    
+                    #This is used in GazePredictor, but it was cleaner  to just put it here -- Craig
+                    self.params['xy_coords'] = sampledata.getGaze() 
+                    
+                    # I'm not sure why we used to stop  here if a response was recorded. I think we only want to stop when we time out -- Mike
+                    #self.stop()
                     return True
         return False
                     
